@@ -15,6 +15,12 @@ from app.v12_multi_market_feed import DEFAULT_SYMBOLS, DeltaMultiCandleStreamer
 from app.v12_live_signal import fetch_history, build_raw_from_history
 from app.v12_paper_engine import PaperPositionEngine
 from app.telegram_notifier import TelegramNotifier
+from app.v12_cloud_state import (
+    load_engine_state,
+    load_shadow_taken,
+    save_engine_state,
+    save_shadow_taken,
+)
 from app.v923_train import build_price_action_features
 
 
@@ -132,6 +138,11 @@ def main() -> int:
         default="logs/v12/shadow",
     )
     ap.add_argument(
+        "--state-dir",
+        default=None,
+        help="Directory for persistent cloud paper state",
+    )
+    ap.add_argument(
         "--slippage-per-side-pct",
         type=float,
         default=0.02,
@@ -140,6 +151,16 @@ def main() -> int:
 
     out = Path(args.output_dir)
     out.mkdir(parents=True, exist_ok=True)
+    state_dir = Path(args.state_dir) if args.state_dir else None
+    if state_dir is not None:
+        state_dir.mkdir(parents=True, exist_ok=True)
+        shadow_taken.clear()
+        shadow_taken.update(
+            load_shadow_taken(state_dir / "shadow_taken.json", THRESHOLDS)
+        )
+        print("Persistent cloud state: enabled", flush=True)
+    else:
+        print("Persistent cloud state: disabled", flush=True)
     telegram = TelegramNotifier()
     print(f"Telegram notifications: {telegram.enabled}", flush=True)
 
@@ -198,6 +219,18 @@ def main() -> int:
             slippage_per_side=args.slippage_per_side_pct / 100.0,
         )
 
+        if state_dir is not None:
+            state_path = state_dir / f"paper_{int(threshold * 100):02d}.json"
+            if state_path.exists():
+                loaded = load_engine_state(engines[threshold], state_path)
+                print(
+                    f"Loaded paper state P{int(threshold * 100):02d}: "
+                    f"equity=${engines[threshold].equity:.2f} "
+                    f"trades={len(engines[threshold].trades)} "
+                    f"open_position={engines[threshold].position is not None}",
+                    flush=True,
+                )
+
         signal_path = d / "paper_signals.csv"
         f = signal_path.open("w", newline="")
         writer = csv.DictWriter(
@@ -234,6 +267,21 @@ def main() -> int:
         return dict(row) if row else None
 
     model = ShadowSignalEngine(MODEL_DIR)
+
+    def save_state() -> None:
+        if state_dir is None:
+            return
+
+        for threshold in THRESHOLDS:
+            save_engine_state(
+                engines[threshold],
+                state_dir / f"paper_{int(threshold * 100):02d}.json",
+            )
+
+        save_shadow_taken(
+            shadow_taken,
+            state_dir / "shadow_taken.json",
+        )
 
     def on_finalized(row: dict):
         sym = row["finalized_symbol"]
@@ -395,6 +443,8 @@ def main() -> int:
                 flush=True,
             )
 
+        save_state()
+
     streamer = DeltaMultiCandleStreamer(
         stores=stores,
         symbols=DEFAULT_SYMBOLS,
@@ -404,6 +454,8 @@ def main() -> int:
     try:
         streamer.run(seconds=args.seconds)
     finally:
+        save_state()
+
         for threshold in THRESHOLDS:
             summary = engines[threshold].summary()
 

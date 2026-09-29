@@ -14,6 +14,7 @@ from app.v12_market_feed import CandleStore
 from app.v12_multi_market_feed import DEFAULT_SYMBOLS, DeltaMultiCandleStreamer
 from app.v12_live_signal import fetch_history, build_raw_from_history
 from app.v12_paper_engine import PaperPositionEngine
+from app.telegram_notifier import TelegramNotifier
 from app.v923_train import build_price_action_features
 
 
@@ -139,6 +140,8 @@ def main() -> int:
 
     out = Path(args.output_dir)
     out.mkdir(parents=True, exist_ok=True)
+    telegram = TelegramNotifier()
+    print(f"Telegram notifications: {telegram.enabled}", flush=True)
 
     print("=== V12.3 LIVE THRESHOLD SHADOW ENGINE ===")
     print("BTC/ETH/SOL/BNB/XRP live data")
@@ -252,9 +255,23 @@ def main() -> int:
 
         if sym == "BTCUSD":
             for threshold in THRESHOLDS:
-                engines[threshold].process_completed_btc_bar(
+                trade = engines[threshold].process_completed_btc_bar(
                     latest[sym]
                 )
+
+                if trade is not None:
+                    telegram.send(
+                        f"✅ PAPER EXIT | P{int(threshold * 100):02d}\n"
+                        f"Side: {trade['side']}\n"
+                        f"Reason: {trade['reason']}\n"
+                        f"Entry: {trade['entry_price']:.2f}\n"
+                        f"Exit: {trade['exit_price']:.2f}\n"
+                        f"Net Return: {trade['net_return'] * 100:.3f}%\n"
+                        f"Net R: {trade['net_r']:.3f}\n"
+                        f"Hold: {trade['hold_bars']} bars\n"
+                        f"Equity: ${trade['equity_after']:.2f}\n"
+                        f"Time: {trade['exit_timestamp']}"
+                    )
 
         x = history[sym].copy()
         x["timestamp"] = pd.to_datetime(
@@ -349,6 +366,22 @@ def main() -> int:
                 sig,
                 btc_current,
             )
+
+            if filled:
+                position = engines[threshold].position
+
+                if position is not None:
+                    telegram.send(
+                        f"📈 PAPER ENTRY | P{int(threshold * 100):02d}\n"
+                        f"Side: {position.side}\n"
+                        f"BTC: {position.signal_reference_price:.2f}\n"
+                        f"Entry: {position.entry_price:.2f}\n"
+                        f"SL: {position.sl:.2f}\n"
+                        f"TP: {position.tp:.2f}\n"
+                        f"Percentile: {position.score_percentile:.3f}\n"
+                        f"Signal Time: {position.signal_timestamp}\n"
+                        f"Fill Time: {position.fill_timestamp}"
+                    )
 
             tag = f"{threshold:.2f}"
 

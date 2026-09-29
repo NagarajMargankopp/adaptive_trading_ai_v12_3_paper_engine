@@ -1,0 +1,45 @@
+name: Telegram Test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  telegram-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Send Telegram test
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python - <<'PY'
+          import os
+          import requests
+
+          token = os.environ["TELEGRAM_BOT_TOKEN"]
+          chat_id = os.environ["TELEGRAM_CHAT_ID"]
+
+          if not token or not chat_id:
+              raise SystemExit("Telegram secrets are missing")
+
+          url = "https://" + "api.telegram.org/bot" + token + "/sendMessage"
+
+          response = requests.post(
+              url,
+              json={
+                  "chat_id": chat_id,
+                  "text": "✅ GitHub Actions Telegram test\nAdaptive Trading AI\nPaper trading only.",
+              },
+              timeout=20,
+          )
+
+          response.raise_for_status()
+
+          data = response.json()
+
+          if not data.get("ok"):
+              raise SystemExit(f"Telegram API error: {data}")
+
+          print("Telegram test sent successfully.")
+          PY

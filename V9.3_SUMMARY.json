@@ -1,0 +1,61 @@
+{
+  "version": "V9.3",
+  "title": "Price-Action-Aware Ranker",
+  "data_rows": 258639,
+  "features": 191,
+  "base_v827_features": 127,
+  "added_price_action_features": 64,
+  "price_action_feature_groups": {
+    "candle_geometry": 9,
+    "candle_patterns": 6,
+    "market_structure_breakout": 28,
+    "directional_structure": 18,
+    "range_regime": 3
+  },
+  "adaptive_failure_learner": "OFF",
+  "policy_locked": {
+    "k_per_side_per_day": 1,
+    "score_floor_pct": 0.9,
+    "stop_pct": 0.005,
+    "target_pct": 0.01,
+    "horizon_bars": 12,
+    "risk_per_trade": 0.005,
+    "round_trip_cost": 0.0014
+  },
+  "validation_positive_folds": 3,
+  "test_positive_folds": 3,
+  "test_trades": 267,
+  "test_wins": 182,
+  "test_win_rate_pct": 68.16479400749064,
+  "test_raw_net_return_sum": 0.5858425686620172,
+  "test_profit_factor": 3.0066849247619127,
+  "v92_baseline_test_trades": 256,
+  "v92_baseline_test_win_rate_pct": 69.140625,
+  "v92_baseline_test_raw_net_return_sum": 0.5647479831172009,
+  "v92_baseline_test_profit_factor": 2.87358805698749,
+  "test_raw_sum_delta_vs_v92": 0.021094585544816358,
+  "test_descriptive_fold_compounded_pct": 78.97545535416222,
+  "v92_descriptive_fold_compounded_pct": 75.23057331947341,
+  "blind_future": {
+    "trades": 33,
+    "win_rate_pct": 60.60606060606061,
+    "total_net_return": 0.057810363874725976,
+    "mean_net_return": 0.0017518292083250296,
+    "median_net_return": 0.0017132721991971035,
+    "profit_factor": 2.5733204620237955,
+    "max_drawdown_return": -0.007969192315208984,
+    "equity_return_pct": 5.909152689912922,
+    "portfolio_return": 0.05909152689912922,
+    "long_trades": 16,
+    "short_trades": 17,
+    "tp_trades": 6,
+    "sl_trades": 4,
+    "time_trades": 23
+  },
+  "blind_future_mean_return_ci": [
+    0.00011845375801470726,
+    0.003290449007065484
+  ],
+  "status": "RESEARCH_ONLY \u2014 NO LIVE EXECUTION",
+  "promotion_to_live": false
+}

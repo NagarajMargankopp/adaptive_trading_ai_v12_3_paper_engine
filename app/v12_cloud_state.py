@@ -120,3 +120,43 @@ def load_shadow_taken(
         }
 
     return result
+
+
+def save_stream_state(
+    last_processed_timestamp: str,
+    path: str | Path,
+) -> None:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = {
+        "version": STATE_VERSION,
+        "last_processed_timestamp": str(last_processed_timestamp),
+    }
+
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(
+        json.dumps(payload, indent=2),
+        encoding="utf-8",
+    )
+    tmp.replace(path)
+
+
+def load_stream_state(
+    path: str | Path,
+) -> str | None:
+    path = Path(path)
+
+    if not path.exists():
+        return None
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+
+    if payload.get("version") != STATE_VERSION:
+        raise RuntimeError(
+            f"Unsupported stream state version: "
+            f"{payload.get('version')}"
+        )
+
+    value = payload.get("last_processed_timestamp")
+    return str(value) if value else None

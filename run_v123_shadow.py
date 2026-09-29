@@ -10,7 +10,7 @@ import joblib
 import numpy as np
 import pandas as pd
 
-from app.v12_market_feed import CandleStore
+from app.v12_market_feed import Candle, CandleStore
 from app.v12_multi_market_feed import DEFAULT_SYMBOLS, DeltaMultiCandleStreamer
 from app.v12_live_signal import fetch_history, build_raw_from_history
 from app.v12_paper_engine import PaperPositionEngine
@@ -18,8 +18,10 @@ from app.telegram_notifier import TelegramNotifier
 from app.v12_cloud_state import (
     load_engine_state,
     load_shadow_taken,
+    load_stream_state,
     save_engine_state,
     save_shadow_taken,
+    save_stream_state,
 )
 from app.v923_train import build_price_action_features
 
@@ -152,8 +154,12 @@ def main() -> int:
     out = Path(args.output_dir)
     out.mkdir(parents=True, exist_ok=True)
     state_dir = Path(args.state_dir) if args.state_dir else None
+    stream_state_path = None
+    resume_timestamp = None
     if state_dir is not None:
         state_dir.mkdir(parents=True, exist_ok=True)
+        stream_state_path = state_dir / "stream_state.json"
+        resume_timestamp = load_stream_state(stream_state_path)
         shadow_taken.clear()
         shadow_taken.update(
             load_shadow_taken(state_dir / "shadow_taken.json", THRESHOLDS)
@@ -204,6 +210,53 @@ def main() -> int:
         sym: CandleStore(stores_dir / f"{sym}_5m.csv")
         for sym in DEFAULT_SYMBOLS
     }
+
+    if resume_timestamp:
+        resume_ts = pd.Timestamp(resume_timestamp)
+        if resume_ts.tzinfo is None:
+            resume_ts = resume_ts.tz_localize("UTC")
+        else:
+            resume_ts = resume_ts.tz_convert("UTC")
+
+        print(
+            f"Resuming stream state from: {resume_ts.isoformat()}",
+            flush=True,
+        )
+
+        for sym in DEFAULT_SYMBOLS:
+            match = history[sym][
+                history[sym]["timestamp"] == resume_ts
+            ]
+
+            if match.empty:
+                print(
+                    f"WARNING: resume candle not found for {sym}; "
+                    f"stream state will not be seeded for this symbol",
+                    flush=True,
+                )
+                continue
+
+            r = match.iloc[-1]
+
+            candle = Candle(
+                symbol=sym,
+                start_us=int(resume_ts.timestamp() * 1_000_000),
+                open=float(r["open"]),
+                high=float(r["high"]),
+                low=float(r["low"]),
+                close=float(r["close"]),
+                volume=float(r["volume"]),
+                server_ts_us=int(resume_ts.timestamp() * 1_000_000),
+            )
+
+            seed = candle.to_dict()
+            seed["finalized"] = True
+            seed["local_received_ts"] = time.time()
+
+            stores[sym].rows[candle.start_us] = seed
+            stores[sym].current_start_us = candle.start_us
+            stores[sym].finalized_starts.add(candle.start_us)
+            stores[sym]._flush()
 
     engines = {}
     signal_files = {}
@@ -444,6 +497,9 @@ def main() -> int:
             )
 
         save_state()
+
+        if stream_state_path is not None:
+            save_stream_state(ts.isoformat(), stream_state_path)
 
     streamer = DeltaMultiCandleStreamer(
         stores=stores,

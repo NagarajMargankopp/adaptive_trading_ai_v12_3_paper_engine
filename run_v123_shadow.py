@@ -156,10 +156,20 @@ def main() -> int:
     state_dir = Path(args.state_dir) if args.state_dir else None
     stream_state_path = None
     resume_timestamp = None
+    resume_timestamp_pd = None
+
     if state_dir is not None:
         state_dir.mkdir(parents=True, exist_ok=True)
         stream_state_path = state_dir / "stream_state.json"
         resume_timestamp = load_stream_state(stream_state_path)
+
+        if resume_timestamp:
+            resume_timestamp_pd = pd.Timestamp(resume_timestamp)
+            if resume_timestamp_pd.tzinfo is None:
+                resume_timestamp_pd = resume_timestamp_pd.tz_localize("UTC")
+            else:
+                resume_timestamp_pd = resume_timestamp_pd.tz_convert("UTC")
+
         shadow_taken.clear()
         shadow_taken.update(
             load_shadow_taken(state_dir / "shadow_taken.json", THRESHOLDS)
@@ -344,6 +354,16 @@ def main() -> int:
             ts = ts.tz_localize("UTC")
         else:
             ts = ts.tz_convert("UTC")
+
+        # The first WebSocket candle after a cloud restart can finalize
+        # the exact candle saved by the previous session. Ignore that
+        # already-processed timestamp to prevent duplicate exits/signals.
+        if resume_timestamp_pd is not None and ts <= resume_timestamp_pd:
+            print(
+                f"RESUME_SKIP {ts.isoformat()} | already processed",
+                flush=True,
+            )
+            return
 
         latest[sym] = {
             "timestamp": ts,

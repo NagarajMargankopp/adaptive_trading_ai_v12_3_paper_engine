@@ -1,0 +1,252 @@
+name: V12.3 Paper Cloud
+
+on:
+  workflow_dispatch:
+    inputs:
+      session_seconds:
+        description: "Session duration in seconds"
+        required: false
+        default: "600"
+        type: string
+      auto_continue:
+        description: "Automatically start the next cloud session"
+        required: false
+        default: false
+        type: boolean
+
+  repository_dispatch:
+    types:
+      - continue_paper
+
+concurrency:
+  group: v123-paper-engine
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  paper:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+
+    env:
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Configure session
+        id: config
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          MANUAL_SECONDS: ${{ inputs.session_seconds }}
+          MANUAL_CONTINUE: ${{ inputs.auto_continue }}
+        run: |
+          if [ "$EVENT_NAME" = "repository_dispatch" ]; then
+            echo "seconds=20700" >> "$GITHUB_OUTPUT"
+            echo "continue=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "seconds=${MANUAL_SECONDS:-600}" >> "$GITHUB_OUTPUT"
+            echo "continue=${MANUAL_CONTINUE:-false}" >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "Session configured."
+
+      - name: Restore previous paper state
+        run: |
+          mkdir -p cloud_state
+
+          python - <<'PY'
+          import os
+          import subprocess
+          import time
+          from pathlib import Path
+
+          import requests
+
+          token = os.environ["GITHUB_TOKEN"]
+          repo = os.environ["GITHUB_REPOSITORY"]
+
+          headers = {
+              "Authorization": f"Bearer {token}",
+              "Accept": "application/vnd.github+json",
+              "X-GitHub-Api-Version": "2026-03-10",
+          }
+
+          artifacts_url = (
+              "https://"
+              + "api.github.com/repos/"
+              + repo
+              + "/actions/artifacts"
+              + "?name=v123-paper-state&per_page=100"
+          )
+
+          latest = None
+
+          for attempt in range(5):
+              response = requests.get(
+                  artifacts_url,
+                  headers=headers,
+                  timeout=20,
+              )
+              response.raise_for_status()
+
+              artifacts = [
+                  a
+                  for a in response.json().get("artifacts", [])
+                  if not a.get("expired", False)
+              ]
+
+              if artifacts:
+                  latest = max(
+                      artifacts,
+                      key=lambda a: a.get("created_at", ""),
+                  )
+                  break
+
+              if attempt < 4:
+                  time.sleep(3)
+
+          if latest is None:
+              print("No previous paper state found. Starting fresh.")
+              raise SystemExit(0)
+
+          artifact_id = latest["id"]
+          print(f"Restoring artifact ID: {artifact_id}")
+
+          download_url = (
+              "https://"
+              + "api.github.com/repos/"
+              + repo
+              + f"/actions/artifacts/{artifact_id}/zip"
+          )
+
+          response = requests.get(
+              download_url,
+              headers=headers,
+              timeout=60,
+              allow_redirects=True,
+          )
+          response.raise_for_status()
+
+          zip_path = Path("/tmp/v123-paper-state.zip")
+          zip_path.write_bytes(response.content)
+
+          restore_dir = Path("/tmp/v123-paper-state-restore")
+          restore_dir.mkdir(parents=True, exist_ok=True)
+
+          subprocess.run(
+              ["unzip", "-oq", str(zip_path), "-d", str(restore_dir)],
+              check=True,
+          )
+
+          tgz_files = list(restore_dir.glob("*.tgz"))
+
+          if not tgz_files:
+              raise RuntimeError(
+                  "Paper state artifact does not contain a .tgz file"
+              )
+
+          subprocess.run(
+              [
+                  "tar",
+                  "-xzf",
+                  str(tgz_files[0]),
+                  "-C",
+                  "cloud_state",
+              ],
+              check=True,
+          )
+
+          print("Previous paper state restored.")
+          PY
+
+      - name: Run V12.3 paper engine
+        id: run_engine
+        run: |
+          mkdir -p logs/v12/cloud
+
+          python run_v123_shadow.py \
+            --seconds "${{ steps.config.outputs.seconds }}" \
+            --warmup-bars 400 \
+            --output-dir logs/v12/cloud \
+            --state-dir cloud_state \
+            --slippage-per-side-pct 0.02
+
+      - name: Create state archive
+        if: always()
+        run: |
+          mkdir -p cloud_state
+          tar -czf /tmp/v123-paper-state.tgz -C cloud_state .
+
+      - name: Upload paper state
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v123-paper-state
+          path: /tmp/v123-paper-state.tgz
+          retention-days: 30
+          overwrite: true
+
+      - name: Send failure notification
+        if: failure()
+        run: |
+          python - <<'PY'
+          from app.telegram_notifier import TelegramNotifier
+
+          TelegramNotifier().send(
+              "⚠️ V12.3 CLOUD SESSION STOPPED WITH ERROR\n"
+              "Paper trading only.\n"
+              "The next automatic session was not started."
+          )
+          PY
+
+      - name: Start next cloud session
+        if: ${{ steps.config.outputs.continue == 'true' && steps.run_engine.outcome == 'success' }}
+        run: |
+          python - <<'PY'
+          import os
+          import requests
+
+          token = os.environ["GITHUB_TOKEN"]
+          repo = os.environ["GITHUB_REPOSITORY"]
+
+          dispatch_url = (
+              "https://"
+              + "api.github.com/repos/"
+              + repo
+              + "/dispatches"
+          )
+
+          response = requests.post(
+              dispatch_url,
+              headers={
+                  "Authorization": f"Bearer {token}",
+                  "Accept": "application/vnd.github+json",
+                  "X-GitHub-Api-Version": "2026-03-10",
+              },
+              json={
+                  "event_type": "continue_paper"
+              },
+              timeout=20,
+          )
+
+          response.raise_for_status()
+          print("Next V12.3 cloud session dispatched.")
+          PY

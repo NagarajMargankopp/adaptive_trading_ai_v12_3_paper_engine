@@ -25,3 +25,6 @@ logs/
 
 # Large historical training datasets
 data/processed/
+
+# Cloud runner local state
+cloud_state/
